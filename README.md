@@ -89,9 +89,9 @@ GPU idle temperature (CPU-only run): **~32 °C**.
 | Catalog files | 7.6 MB FITS + 10.3 MB CSV | 7.8 MB FITS + 10.6 MB CSV |
 | Median flux_auto | 3.24 nanomaggies | 3.24 nanomaggies |
 | Brightest source (M87 halo) | 148 403 nanomaggies | 148 403 nanomaggies |
-| **Total wall time** | **6.9 s** | **5.4 s** |
-| Throughput | ~14 900 sources / s | ~19 000 sources / s |
-| GPU pipeline speedup | — | **1.3×** |
+| **Total wall time** | **6.9 s** | **4.8 s** |
+| Throughput | ~14 900 sources / s | ~21 400 sources / s |
+| GPU pipeline speedup | — | **1.4×** |
 
 M87 true nucleus position (SIMBAD J2000): RA = 187.706°, Dec = +12.391°.
 The flux-weighted centroid of the detected blob may differ due to the halo
@@ -142,28 +142,32 @@ vera-run fits/ r vera-virgo
 
 ```
 ┌── Vera multi-brick pipeline ───────────────────────────────────
-│  Data dir  : fits/
+│  Data dir  : fits\
 │  Band      : r
-│  Bricks    : 28   Threads : 20   Dedup tol : 1"
+│  Bricks    : 28
+│  Threads   : 20 (Rayon)
 │  Conv GPU  : wgpu (RTX 4070 Ti)
+│  Dedup tol : 1"
 │
-│  [ 1/28] 1877p122  →  3576 sources  (1.84s)
-│  ...
-│  [28/28] 2002p107  →  3213 sources  (1.93s)
+  GPU : NVIDIA GeForce RTX 4070 Ti (Vulkan)
+  [ 1/28] 1872p120  →  3044 sources  (1.76s)
+  [ 2/28] 1878p127  →  4500 sources  (2.22s)
+  ...
+  [28/28] 1877p125  →  3473 sources  (2.27s)
 │
-│  Pipeline complet : 5.1s
-│  Sources brutes   : 102 629
-│  Doublons supprimés : 90  (4.4ms)
-│  Sources finales    : 102 539
+│  Pipeline complet : 4.5s
+│  Sources brutes   : 102629
+│  Doublons supprimés : 90  (27.0ms)
+│  Sources finales    : 102539
 │
 │  Statistiques flux_auto (nanomaggies) :
-│    médiane = 3.2400   max = 148403.1
+│    médiane = 3.2414   max = 148402.7
 │
 │  Fichiers écrits :
-│    vera-virgo.fits  (7784 kB, 3.8s)
-│    vera-virgo.csv   (10589 kB, 0.5s)
+│    vera-virgo.fits  (7822 kB, 8.4ms)
+│    vera-virgo.csv  (10551 kB, 215.5ms)
 │
-│  Total : 5.4s
+│  Total : 4.8s
 └───────────────────────────────────────────────────────────────
 ```
 
