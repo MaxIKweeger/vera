@@ -1,4 +1,5 @@
 [workspace]
+license = "MIT"
 members = [
     "crates/vera-fits",
     "crates/vera-pipeline",
