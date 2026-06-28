@@ -59,6 +59,8 @@ fn process_brick(path: &Path, gpu: Option<&GpuContext>) -> Option<(String, Vec<M
         Some(ctx) => detect_gpu(&image, &bg, &DetectConfig::default(), ctx),
         None      => detect(&image, &bg, &DetectConfig::default()),
     };
+    // CPU measurement: the GPU is already saturated by 20 parallel conv jobs.
+    // GPU Kron adds queue contention and slows the pipeline vs CPU Rayon.
     let meas = measure_all(&image, &bg, &det, wcs.as_ref(), &MeasureConfig::default());
     Some((name, meas))
 }

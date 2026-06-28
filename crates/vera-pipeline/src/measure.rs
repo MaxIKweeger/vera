@@ -6,6 +6,7 @@ use rayon::prelude::*;
 
 use crate::background::BackgroundMap;
 use crate::detect::DetectionList;
+use crate::gpu::{GpuContext, KronParams};
 use vera_fits::WcsHeader;
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -107,6 +108,96 @@ pub fn measure_all(
         .collect()
 }
 
+/// Like `measure_all` but offloads Kron aperture flux computation to the GPU.
+/// CPU still computes centroid, moments, and Kron radius; GPU computes `flux_auto`
+/// for all sources in a single batched dispatch (one workgroup per source).
+pub fn measure_all_gpu(
+    image: &Array2<f32>,
+    bg_map: &BackgroundMap,
+    detections: &DetectionList,
+    wcs: Option<&WcsHeader>,
+    config: &MeasureConfig,
+    ctx: &GpuContext,
+) -> Vec<Measurement> {
+    let residual = bg_map.subtract(image);
+    let (nrows, ncols) = image.dim();
+
+    // Build sorted pixel list per label (sequential scan, same as CPU path).
+    let mut pixels_by_label: HashMap<u32, Vec<(usize, usize)>> = HashMap::new();
+    for r in 0..nrows {
+        for c in 0..ncols {
+            let l = detections.label_map[[r, c]];
+            if l > 0 { pixels_by_label.entry(l).or_default().push((r, c)); }
+        }
+    }
+
+    // CPU Rayon: centroid + moments + Kron radius (fast — small isophotal footprints).
+    let partial: Vec<(f64, f64, f32, f32, f32, f32, f32, f32, u16)> = detections
+        .detections
+        .par_iter()
+        .map(|det| {
+            let pixels = pixels_by_label.get(&det.label).map(Vec::as_slice).unwrap_or(&[]);
+            let (flux_iso, x_c, y_c, a, b, theta) =
+                centroid_and_moments(pixels, &residual, det.npix, &det.bbox);
+            let kron_radius = compute_kron_radius(pixels, &residual, x_c, y_c, a, b, theta)
+                .max(config.kron_min_radius);
+            let ellipticity = 1.0 - b / a;
+            let mut flags = 0u16;
+            if det.bbox[0] == 0 || det.bbox[1] + 1 >= nrows
+                || det.bbox[2] == 0 || det.bbox[3] + 1 >= ncols
+            {
+                flags |= FLAG_EDGE;
+            }
+            (x_c, y_c, a, b, theta, ellipticity, kron_radius, flux_iso, flags)
+        })
+        .collect();
+
+    // Prepare GPU Kron params (one entry per detection).
+    let kron_gpu: Vec<KronParams> = partial
+        .iter()
+        .zip(&detections.detections)
+        .map(|(&(x_c, y_c, a, b, theta, _, kron_radius, _, _), det)| {
+            let aperture = kron_radius * config.kron_factor;
+            let margin = (aperture as f64 * a.max(b) as f64).ceil() as usize + 1;
+            let ct = (theta * PI / 180.0).cos();
+            let st = (theta * PI / 180.0).sin();
+            KronParams {
+                x_c: x_c as f32, y_c: y_c as f32,
+                cos_theta: ct, sin_theta: st,
+                inv_a: 1.0 / a, inv_b: 1.0 / b,
+                ap_sq: aperture * aperture,
+                r0: det.bbox[0].saturating_sub(margin) as u32,
+                c0: det.bbox[2].saturating_sub(margin) as u32,
+                r1: ((det.bbox[1] + margin + 1).min(nrows)) as u32,
+                c1: ((det.bbox[3] + margin + 1).min(ncols)) as u32,
+            }
+        })
+        .collect();
+
+    // GPU: all Kron fluxes in one batched dispatch.
+    let flux_auto_gpu = ctx.kron_flux_batch(&residual, &kron_gpu);
+
+    // Assemble final measurements.
+    partial
+        .into_iter()
+        .zip(flux_auto_gpu)
+        .zip(&detections.detections)
+        .map(|(((x_c, y_c, a, b, theta, ellipticity, kron_radius, flux_iso, flags), flux_auto), det)| {
+            let (ra, dec) = match wcs {
+                Some(w) => { let (ra, dec) = w.pix_to_sky(x_c, y_c); (Some(ra), Some(dec)) }
+                None => (None, None),
+            };
+            Measurement {
+                label: det.label, npix: det.npix,
+                x_c, y_c, ra, dec,
+                a, b, theta, ellipticity,
+                kron_radius, flux_iso, flux_auto,
+                flags,
+            }
+        })
+        .collect()
+}
+
 // ── Single-source measurement ─────────────────────────────────────────────────
 
 fn measure_one(
@@ -120,66 +211,8 @@ fn measure_one(
     nrows: usize,
     ncols: usize,
 ) -> Measurement {
-    // ── Isophotal flux + flux-weighted centroid ───────────────────────────────
-    let mut flux_iso = 0.0f32;
-    let mut sum_w = 0.0f64;
-    let mut sum_wx = 0.0f64;
-    let mut sum_wy = 0.0f64;
-
-    for &(r, c) in pixels {
-        let v = image[[r, c]];
-        if !v.is_finite() {
-            continue;
-        }
-        flux_iso += v;
-        let w = v.max(0.0) as f64; // positive-flux weighting for centroid
-        sum_w  += w;
-        sum_wx += w * c as f64;
-        sum_wy += w * r as f64;
-    }
-
-    let (x_c, y_c) = if sum_w > 0.0 {
-        (sum_wx / sum_w, sum_wy / sum_w)
-    } else {
-        (
-            (bbox[2] + bbox[3]) as f64 / 2.0,
-            (bbox[0] + bbox[1]) as f64 / 2.0,
-        )
-    };
-
-    // ── 2nd-order moments → semi-axes ────────────────────────────────────────
-    let mut mxx = 0.0f64;
-    let mut myy = 0.0f64;
-    let mut mxy = 0.0f64;
-    let mut sum_w2 = 0.0f64;
-
-    for &(r, c) in pixels {
-        let v = image[[r, c]];
-        if !v.is_finite() {
-            continue;
-        }
-        let w = v.max(0.0) as f64;
-        let dx = c as f64 - x_c;
-        let dy = r as f64 - y_c;
-        mxx   += w * dx * dx;
-        myy   += w * dy * dy;
-        mxy   += w * dx * dy;
-        sum_w2 += w;
-    }
-
-    let (a, b, theta) = if sum_w2 > 0.0 {
-        mxx /= sum_w2;
-        myy /= sum_w2;
-        mxy /= sum_w2;
-        moments_to_axes(mxx as f32, myy as f32, mxy as f32)
-    } else {
-        let r = ((npix as f32) / PI).sqrt();
-        (r, r, 0.0f32)
-    };
-
-    // Clamp: b <= a, both >= 0.5 px (avoids division by zero).
-    let a = a.max(0.5);
-    let b = b.max(0.5).min(a);
+    let (flux_iso, x_c, y_c, a, b, theta) =
+        centroid_and_moments(pixels, image, npix, bbox);
     let ellipticity = 1.0 - b / a;
 
     // ── Kron radius (dimensionless, in units of ellipse scale) ───────────────
@@ -233,6 +266,49 @@ fn measure_one(
         flux_auto,
         flags,
     }
+}
+
+// ── Shared computation helpers ────────────────────────────────────────────────
+
+/// Flux-weighted centroid + second-order moments → (flux_iso, x_c, y_c, a, b, theta).
+fn centroid_and_moments(
+    pixels: &[(usize, usize)],
+    image: &Array2<f32>,
+    npix: u32,
+    bbox: &[usize; 4],
+) -> (f32, f64, f64, f32, f32, f32) {
+    let mut flux_iso = 0.0f32;
+    let mut sum_w = 0.0f64; let mut sum_wx = 0.0f64; let mut sum_wy = 0.0f64;
+    for &(r, c) in pixels {
+        let v = image[[r, c]];
+        if !v.is_finite() { continue; }
+        flux_iso += v;
+        let w = v.max(0.0) as f64;
+        sum_w += w; sum_wx += w * c as f64; sum_wy += w * r as f64;
+    }
+    let (x_c, y_c) = if sum_w > 0.0 {
+        (sum_wx / sum_w, sum_wy / sum_w)
+    } else {
+        ((bbox[2] + bbox[3]) as f64 / 2.0, (bbox[0] + bbox[1]) as f64 / 2.0)
+    };
+
+    let mut mxx = 0.0f64; let mut myy = 0.0f64;
+    let mut mxy = 0.0f64; let mut sum_w2 = 0.0f64;
+    for &(r, c) in pixels {
+        let v = image[[r, c]];
+        if !v.is_finite() { continue; }
+        let w = v.max(0.0) as f64;
+        let dx = c as f64 - x_c; let dy = r as f64 - y_c;
+        mxx += w * dx * dx; myy += w * dy * dy; mxy += w * dx * dy; sum_w2 += w;
+    }
+    let (a, b, theta) = if sum_w2 > 0.0 {
+        moments_to_axes((mxx/sum_w2) as f32, (myy/sum_w2) as f32, (mxy/sum_w2) as f32)
+    } else {
+        let r = ((npix as f32) / PI).sqrt(); (r, r, 0.0f32)
+    };
+    let a = a.max(0.5);
+    let b = b.max(0.5).min(a);
+    (flux_iso, x_c, y_c, a, b, theta)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

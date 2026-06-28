@@ -2,15 +2,35 @@ use ndarray::Array2;
 
 use crate::convolve::gaussian_1d;
 
-/// GPU context holding a wgpu device, queue, and pre-compiled Gaussian pipelines.
+/// GPU context holding a wgpu device, queue, and pre-compiled pipelines.
 /// Shared (via `&GpuContext`) across Rayon threads — wgpu Device/Queue are Send+Sync.
 pub struct GpuContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    // Gaussian convolution (H + V passes)
     pipeline_h: wgpu::ComputePipeline,
     pipeline_v: wgpu::ComputePipeline,
     bgl: wgpu::BindGroupLayout,
+    // Kron aperture flux (one workgroup per detection)
+    pipeline_kron: wgpu::ComputePipeline,
+    bgl_kron: wgpu::BindGroupLayout,
 }
+
+/// Per-detection parameters uploaded to the GPU Kron shader.
+/// Layout must match the WGSL `KronParams` struct exactly (repr C, 44 bytes).
+#[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+pub struct KronParams {
+    pub x_c: f32, pub y_c: f32,
+    pub cos_theta: f32, pub sin_theta: f32,
+    pub inv_a: f32, pub inv_b: f32,
+    pub ap_sq: f32,
+    pub r0: u32, pub c0: u32, pub r1: u32, pub c1: u32,
+}
+
+#[repr(C)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+struct KronGlobals { ncols: u32, n_dets: u32 }
 
 #[repr(C)]
 #[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
@@ -132,7 +152,62 @@ impl GpuContext {
             cache: None,
         });
 
-        Some(Self { device, queue, pipeline_h, pipeline_v, bgl })
+        // ── Kron aperture pipeline ────────────────────────────────────────────
+        let shader_kron = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("measure"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/measure.wgsl").into()),
+        });
+
+        let bgl_kron = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("kron_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false, min_binding_size: None,
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false, min_binding_size: None,
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false, min_binding_size: None,
+                    }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: None,
+                    }, count: None,
+                },
+            ],
+        });
+
+        let kron_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("kron_layout"),
+            bind_group_layouts: &[Some(&bgl_kron)],
+            immediate_size: 0,
+        });
+
+        let pipeline_kron = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("kron"),
+            layout: Some(&kron_layout),
+            module: &shader_kron,
+            entry_point: Some("main_kron"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        Some(Self { device, queue, pipeline_h, pipeline_v, bgl, pipeline_kron, bgl_kron })
     }
 
     /// GPU separable Gaussian smooth: two compute passes (H then V).
@@ -260,5 +335,96 @@ impl GpuContext {
         staging.unmap();
 
         Array2::from_shape_vec((nrows, ncols), result).unwrap()
+    }
+
+    /// GPU Kron aperture flux for all detections in parallel.
+    /// Returns `flux_auto` for each entry in `params` (same order).
+    pub fn kron_flux_batch(&self, residual: &Array2<f32>, params: &[KronParams]) -> Vec<f32> {
+        if params.is_empty() {
+            return Vec::new();
+        }
+
+        let (nrows, ncols) = residual.dim();
+        let n_dets = params.len() as u32;
+        let res_bytes = (nrows * ncols * std::mem::size_of::<f32>()) as u64;
+        let params_bytes = (params.len() * std::mem::size_of::<KronParams>()) as u64;
+        let out_bytes = (params.len() * std::mem::size_of::<f32>()) as u64;
+
+        let globals = KronGlobals { ncols: ncols as u32, n_dets };
+
+        // ── Buffers ───────────────────────────────────────────────────────────
+        let buf_res = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("kron_residual"),
+            size: res_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let buf_params = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("kron_params"),
+            size: params_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let buf_out = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("kron_out"),
+            size: out_bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let buf_globals = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("kron_globals"),
+            size: std::mem::size_of::<KronGlobals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let buf_staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("kron_staging"),
+            size: out_bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // ── Upload ────────────────────────────────────────────────────────────
+        let res_data: Vec<f32> = residual.iter()
+            .map(|&v| if v.is_finite() { v } else { 0.0 })
+            .collect();
+        self.queue.write_buffer(&buf_res, 0, bytemuck::cast_slice(&res_data));
+        self.queue.write_buffer(&buf_params, 0, bytemuck::cast_slice(params));
+        self.queue.write_buffer(&buf_globals, 0, bytemuck::bytes_of(&globals));
+
+        // ── Dispatch ──────────────────────────────────────────────────────────
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("kron_bg"),
+            layout: &self.bgl_kron,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buf_res.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: buf_params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: buf_out.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: buf_globals.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("kron_encoder") }
+        );
+        {
+            let mut pass = encoder.begin_compute_pass(
+                &wgpu::ComputePassDescriptor { label: Some("kron_pass"), timestamp_writes: None }
+            );
+            pass.set_pipeline(&self.pipeline_kron);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(n_dets, 1, 1); // one workgroup per detection
+        }
+        encoder.copy_buffer_to_buffer(&buf_out, 0, &buf_staging, 0, out_bytes);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // ── Readback ─────────────────────────────────────────────────────────
+        let slice = buf_staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+
+        let result: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        buf_staging.unmap();
+        result
     }
 }

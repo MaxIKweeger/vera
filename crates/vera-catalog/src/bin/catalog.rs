@@ -3,7 +3,7 @@ use vera_fits::read_image_f32;
 use vera_pipeline::background::{BackgroundConfig, BackgroundMap};
 use vera_pipeline::detect::{detect, detect_gpu, DetectConfig};
 use vera_pipeline::gpu::GpuContext;
-use vera_pipeline::measure::{measure_all, MeasureConfig};
+use vera_pipeline::measure::{measure_all, measure_all_gpu, MeasureConfig};
 use vera_catalog::{csv_write, fits_write};
 
 fn main() {
@@ -42,7 +42,10 @@ fn main() {
         Some(ctx) => detect_gpu(&image, &bg_map, &DetectConfig::default(), ctx),
         None      => detect(&image, &bg_map, &DetectConfig::default()),
     };
-    let mut meas = measure_all(&image, &bg_map, &det, wcs.as_ref(), &MeasureConfig::default());
+    let mut meas = match gpu.as_ref() {
+        Some(ctx) => measure_all_gpu(&image, &bg_map, &det, wcs.as_ref(), &MeasureConfig::default(), ctx),
+        None      => measure_all(&image, &bg_map, &det, wcs.as_ref(), &MeasureConfig::default()),
+    };
 
     // Sort by flux_auto descending (standard catalogue ordering).
     meas.sort_by(|a, b| b.flux_auto.partial_cmp(&a.flux_auto).unwrap());

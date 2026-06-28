@@ -3,7 +3,7 @@ use vera_fits::read_image_f32;
 use vera_pipeline::background::{BackgroundConfig, BackgroundMap};
 use vera_pipeline::detect::{detect, detect_gpu, DetectConfig};
 use vera_pipeline::gpu::GpuContext;
-use vera_pipeline::measure::{measure_all, MeasureConfig};
+use vera_pipeline::measure::{measure_all, measure_all_gpu, MeasureConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -46,9 +46,10 @@ fn main() {
     let t_det = t1.elapsed();
 
     let t2 = std::time::Instant::now();
-    let mut measurements = measure_all(
-        &image, &bg_map, &det_result, wcs.as_ref(), &MeasureConfig::default(),
-    );
+    let mut measurements = match gpu.as_ref() {
+        Some(ctx) => measure_all_gpu(&image, &bg_map, &det_result, wcs.as_ref(), &MeasureConfig::default(), ctx),
+        None      => measure_all(&image, &bg_map, &det_result, wcs.as_ref(), &MeasureConfig::default()),
+    };
     let t_mes = t2.elapsed();
 
     measurements.sort_by(|a, b| b.flux_auto.partial_cmp(&a.flux_auto).unwrap());
