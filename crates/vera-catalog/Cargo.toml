@@ -1,0 +1,14 @@
+[package]
+name = "vera-catalog"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "vera-catalog"
+path = "src/bin/catalog.rs"
+
+[dependencies]
+vera-fits    = { path = "../vera-fits" }
+vera-pipeline = { path = "../vera-pipeline" }
+ndarray      = { workspace = true }
+thiserror    = { workspace = true }

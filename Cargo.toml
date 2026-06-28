@@ -2,6 +2,7 @@
 members = [
     "crates/vera-fits",
     "crates/vera-pipeline",
+    "crates/vera-catalog",
 ]
 resolver = "2"
 
