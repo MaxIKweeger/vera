@@ -4,6 +4,10 @@ A Rust pipeline for detecting and measuring astronomical sources (stars, galaxie
 
 Built on public DECam data from the [DESI Legacy Survey DR10](https://www.legacysurvey.org/dr10/), targeting the Virgo Cluster field (RA ≈ 187.7°, Dec ≈ +12.4°) — the same sky region imaged in the Vera C. Rubin Observatory first-light image ([noirlab2521a](https://noirlab.edu/public/images/noirlab2521a/)).
 
+> **Author:** Hugues LAMBERT  
+> **Developed with:** [Claude Sonnet](https://anthropic.com) (Anthropic) — AI-assisted development under the direction of Hugues LAMBERT  
+> **Target publication:** [Journal of Open Source Software (JOSS)](https://joss.theoj.org)
+
 ---
 
 ## Motivation
@@ -148,3 +152,13 @@ vera/
 ## Compatibility
 
 Legacy Survey DR10 and Rubin DP1 share the same FITS format and calibration convention (nanomaggies, RICE compression, standard WCS). Switching to Rubin data requires only changing the input path.
+
+---
+
+## Attribution
+
+This project was developed by **Hugues LAMBERT** with the assistance of **Claude Sonnet** (Anthropic) as an AI pair-programming tool. All scientific decisions, design choices, and project direction are by Hugues LAMBERT.
+
+Any publication derived from this work (including the planned JOSS paper) will explicitly credit:
+- Hugues LAMBERT — author and scientific director
+- Claude Sonnet (Anthropic) — AI-assisted development
