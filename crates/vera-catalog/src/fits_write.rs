@@ -65,7 +65,7 @@ fn write_primary(w: &mut impl Write, brick: &str, band: &str) -> io::Result<()> 
         kv_str ("TELESCOP","DECam","Dark Energy Camera"),
         kv_str ("FILTER",  band,  "Photometric band"),
         kv_str ("OBJECT",  brick, "Brick identifier"),
-        kv_str ("AUTHOR",  "Hugues LAMBERT", "Scientific director"),
+        kv_str ("AUTHOR",  "MaxKweeger", "Scientific director"),
         kv_str ("SOFTWARE","vera / Claude Sonnet (Anthropic)", "AI-assisted"),
     ];
     write_header_block(w, &cards)
@@ -95,7 +95,7 @@ fn write_bintable(
         kv_int ("TFIELDS",  tfields as i64, "Number of columns"),
         kv_str ("OBJECT",   brick,      "Brick identifier"),
         kv_str ("FILTER",   band,       "Photometric band"),
-        kv_str ("AUTHOR",   "Hugues LAMBERT", "Scientific director"),
+        kv_str ("AUTHOR",   "MaxKweeger", "Scientific director"),
         kv_str ("SOFTWARE", "vera / Claude Sonnet (Anthropic)", "AI-assisted"),
         kv_str ("REFERENC", "joss.theoj.org", "Target journal: JOSS"),
     ];

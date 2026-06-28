@@ -1,0 +1,14 @@
+[package]
+name = "vera-viewer"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "vera-viewer"
+path = "src/main.rs"
+
+[dependencies]
+vera-fits    = { path = "../vera-fits" }
+vera-pipeline = { path = "../vera-pipeline" }
+ndarray      = { workspace = true }
+eframe       = { version = "0.35", default-features = true }

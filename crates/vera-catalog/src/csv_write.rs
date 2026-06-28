@@ -9,7 +9,7 @@ pub fn write(path: &Path, measurements: &[Measurement], brick: &str, band: &str)
     let mut w = BufWriter::new(file);
 
     writeln!(w, "# Vera source catalog — brick={brick} band={band}")?;
-    writeln!(w, "# Author: Hugues LAMBERT | Software: vera / Claude Sonnet (Anthropic)")?;
+    writeln!(w, "# Author: MaxKweeger | Software: vera / Claude Sonnet (Anthropic)")?;
     writeln!(w, "# Target journal: Journal of Open Source Software (joss.theoj.org)")?;
     writeln!(
         w,
