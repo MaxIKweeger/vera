@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "crates/vera-fits",
+    "crates/vera-pipeline",
+]
+resolver = "2"
+
+[workspace.dependencies]
+ndarray = "0.16"
+rayon = "1"
+thiserror = "2"

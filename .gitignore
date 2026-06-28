@@ -1,0 +1,6 @@
+/target
+/fits/
+*.tif
+*.tiff
+claude.bat
+

@@ -1,0 +1,13 @@
+[package]
+name = "vera-fits"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "vera-inspect"
+path = "src/bin/inspect.rs"
+
+[dependencies]
+fitsrs = "0.4"
+ndarray = { workspace = true }
+thiserror = { workspace = true }
