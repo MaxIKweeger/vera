@@ -152,6 +152,59 @@ fn interp_to_image(grid: &Array2<f32>, img_shape: (usize, usize), mesh: usize) -
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    #[test]
+    fn sigma_clip_converges_on_gaussian_sample() {
+        // 1001 values centred at 100 with sigma ~5 (simple arithmetic series).
+        let mut px: Vec<f32> = (0..=1000).map(|i| 100.0 + (i as f32 - 500.0) * 0.01).collect();
+        let (bg, sigma) = sigma_clip_stats(&mut px, 3.0, 10);
+        assert!(bg.is_finite(), "bg must be finite");
+        assert!(sigma.is_finite(), "sigma must be finite");
+        assert!((bg - 100.0).abs() < 1.0, "bg={bg} expected ~100");
+    }
+
+    #[test]
+    fn mode_formula_symmetric_distribution() {
+        // Symmetric: mean == median → mode formula gives median exactly.
+        let mut px: Vec<f32> = (0..=200).map(|i| i as f32).collect();
+        let (bg, _) = sigma_clip_stats(&mut px, 3.0, 1);
+        assert!(bg.is_finite());
+        // For [0..200], median=100, mean=100 → mode = 2.5*100 - 1.5*100 = 100
+        assert!((bg - 100.0).abs() < 1.0, "bg={bg} expected ~100");
+    }
+
+    #[test]
+    fn background_uniform_image() {
+        let img = Array2::from_elem((128, 128), 3.0f32);
+        let map = BackgroundMap::estimate(&img, &BackgroundConfig::default());
+        for &v in map.background().iter() {
+            assert!((v - 3.0).abs() < 0.1, "expected ~3.0, got {v}");
+        }
+    }
+
+    #[test]
+    fn subtract_uniform_gives_near_zero() {
+        let img = Array2::from_elem((128, 128), 7.0f32);
+        let map = BackgroundMap::estimate(&img, &BackgroundConfig::default());
+        for &v in map.subtract(&img).iter() {
+            assert!(v.abs() < 0.1, "expected ~0, got {v}");
+        }
+    }
+
+    #[test]
+    fn rms_uniform_image_is_zero() {
+        let img = Array2::from_elem((128, 128), 5.0f32);
+        let map = BackgroundMap::estimate(&img, &BackgroundConfig::default());
+        for &v in map.rms().iter() {
+            assert!(v < 0.1, "expected rms~0 on uniform image, got {v}");
+        }
+    }
+}
+
 fn bilinear(grid: &Array2<f32>, r: f32, c: f32) -> f32 {
     let (nr, nc) = grid.dim();
     let clamp_r = |i: isize| i.clamp(0, nr as isize - 1) as usize;

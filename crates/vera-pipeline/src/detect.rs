@@ -83,6 +83,80 @@ pub fn detect_from_filtered(
     DetectionList { detections, label_map }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    fn rms_ones(shape: (usize, usize)) -> Array2<f32> {
+        Array2::from_elem(shape, 1.0f32)
+    }
+
+    #[test]
+    fn detect_empty_field_no_sources() {
+        let filtered = Array2::zeros((64, 64));
+        let result = detect_from_filtered(&filtered, &rms_ones((64, 64)), &DetectConfig::default());
+        assert_eq!(result.detections.len(), 0);
+    }
+
+    #[test]
+    fn detect_single_blob() {
+        let mut filtered: Array2<f32> = Array2::zeros((64, 64));
+        for dr in -2isize..=2 {
+            for dc in -2isize..=2 {
+                filtered[[(32 + dr) as usize, (32 + dc) as usize]] = 10.0;
+            }
+        }
+        let result = detect_from_filtered(&filtered, &rms_ones((64, 64)), &DetectConfig::default());
+        assert_eq!(result.detections.len(), 1, "expected exactly 1 source");
+        let d = &result.detections[0];
+        assert!((d.peak_pos[0] as isize - 32).abs() <= 2);
+        assert!((d.peak_pos[1] as isize - 32).abs() <= 2);
+        assert!(d.npix >= 5);
+    }
+
+    #[test]
+    fn detect_two_separated_sources() {
+        let mut filtered: Array2<f32> = Array2::zeros((64, 64));
+        for dr in -2isize..=2 {
+            for dc in -2isize..=2 {
+                filtered[[(12 + dr) as usize, (12 + dc) as usize]] = 10.0;
+                filtered[[(52 + dr) as usize, (52 + dc) as usize]] = 10.0;
+            }
+        }
+        let result = detect_from_filtered(&filtered, &rms_ones((64, 64)), &DetectConfig::default());
+        assert_eq!(result.detections.len(), 2, "expected exactly 2 sources");
+    }
+
+    #[test]
+    fn detect_below_minarea_filtered_out() {
+        let mut filtered: Array2<f32> = Array2::zeros((32, 32));
+        // Only 3 pixels above threshold — below default minarea=5
+        filtered[[10, 10]] = 10.0;
+        filtered[[10, 11]] = 10.0;
+        filtered[[10, 12]] = 10.0;
+        let result = detect_from_filtered(&filtered, &rms_ones((32, 32)), &DetectConfig::default());
+        assert_eq!(result.detections.len(), 0, "blob too small — should be filtered");
+    }
+
+    #[test]
+    fn label_map_matches_detections() {
+        let mut filtered: Array2<f32> = Array2::zeros((32, 32));
+        for dr in -1isize..=1 {
+            for dc in -1isize..=1 {
+                filtered[[(16 + dr) as usize, (16 + dc) as usize]] = 10.0;
+            }
+        }
+        let result = detect_from_filtered(&filtered, &rms_ones((32, 32)), &DetectConfig::default());
+        assert_eq!(result.detections.len(), 1);
+        let label = result.detections[0].label;
+        assert!(label > 0);
+        // The labeled region in label_map should cover the source pixels
+        let labeled_count = result.label_map.iter().filter(|&&l| l == label).count();
+        assert_eq!(labeled_count, result.detections[0].npix as usize);
+    }
+}
+
 // ── Connected-component labeling ──────────────────────────────────────────────
 
 /// Two-pass connected-component labeling with 8-connectivity and Union-Find.
