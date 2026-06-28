@@ -3423,6 +3423,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vera-run"
+version = "0.1.0"
+dependencies = [
+ "ndarray",
+ "rayon",
+ "vera-catalog",
+ "vera-fits",
+ "vera-pipeline",
+]
+
+[[package]]
 name = "vera-viewer"
 version = "0.1.0"
 dependencies = [

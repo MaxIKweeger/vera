@@ -4,6 +4,7 @@ members = [
     "crates/vera-pipeline",
     "crates/vera-catalog",
     "crates/vera-viewer",
+    "crates/vera-run",
 ]
 resolver = "2"
 

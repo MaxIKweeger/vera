@@ -38,7 +38,7 @@ fn schema() -> Vec<Col> {
     ]
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry points ───────────────────────────────────────────────────────
 
 pub fn write(
     path: &Path,
@@ -51,6 +51,99 @@ pub fn write(
     write_primary(&mut w, brick, band)?;
     write_bintable(&mut w, measurements, brick, band)?;
     Ok(())
+}
+
+/// Multi-brick combined catalog — adds a BRICK column (12-char ASCII).
+pub fn write_multi(
+    path: &Path,
+    entries: &[(String, Measurement)],
+    band: &str,
+) -> io::Result<()> {
+    let file = File::create(path)?;
+    let mut w = BufWriter::new(file);
+    write_primary_multi(&mut w, band)?;
+    write_bintable_multi(&mut w, entries, band)?;
+    Ok(())
+}
+
+fn write_primary_multi(w: &mut impl Write, band: &str) -> io::Result<()> {
+    let cards = vec![
+        kv_bool("SIMPLE",  true,  "Standard FITS"),
+        kv_int ("BITPIX",  8,     "Character data"),
+        kv_int ("NAXIS",   0,     "No image"),
+        kv_bool("EXTEND",  true,  "Extensions allowed"),
+        kv_str ("ORIGIN",  "vera","github.com/MaxIKweeger/vera"),
+        kv_str ("TELESCOP","DECam","Dark Energy Camera"),
+        kv_str ("FILTER",  band,  "Photometric band"),
+        kv_str ("AUTHOR",  "MaxKweeger",     "Scientific director"),
+        kv_str ("SOFTWARE","vera / Claude Sonnet (Anthropic)", "AI-assisted"),
+        kv_str ("REFERENC","joss.theoj.org", "Target journal: JOSS"),
+    ];
+    write_header_block(w, &cards)
+}
+
+fn write_bintable_multi(
+    w: &mut impl Write,
+    entries: &[(String, Measurement)],
+    band: &str,
+) -> io::Result<()> {
+    const BRICK_BYTES: usize = 12;
+    let per_row: usize = BRICK_BYTES + schema().iter().map(|c| c.nbytes).sum::<usize>();
+    let naxis2 = entries.len();
+    let ncols  = 1 + schema().len();
+
+    let mut cards = vec![
+        kv_str ("XTENSION", "BINTABLE", "Binary table extension"),
+        kv_int ("BITPIX",   8,          ""),
+        kv_int ("NAXIS",    2,          "2-D table"),
+        kv_int ("NAXIS1",   per_row as i64, "Bytes per row"),
+        kv_int ("NAXIS2",   naxis2 as i64,  "Number of rows"),
+        kv_int ("PCOUNT",   0,          "No heap"),
+        kv_int ("GCOUNT",   1,          ""),
+        kv_int ("TFIELDS",  ncols as i64,   "Number of columns"),
+        kv_str ("FILTER",   band,       "Photometric band"),
+        kv_str ("AUTHOR",   "MaxKweeger",    "Scientific director"),
+        kv_str ("SOFTWARE", "vera / Claude Sonnet (Anthropic)", "AI-assisted"),
+        kv_str ("REFERENC", "joss.theoj.org","Target journal: JOSS"),
+        // BRICK column (1)
+        kv_str ("TTYPE1",   "BRICK",    "Brick identifier"),
+        kv_str ("TFORM1",   "12A",      "12-char ASCII string"),
+    ];
+    for (i, col) in schema().iter().enumerate() {
+        let n = i + 2; // offset by 1 for BRICK
+        cards.push(kv_str(&format!("TTYPE{n}"), col.name,  "Column name"));
+        cards.push(kv_str(&format!("TFORM{n}"), col.tform, "Data format"));
+        if !col.tunit.is_empty() {
+            cards.push(kv_str(&format!("TUNIT{n}"), col.tunit, "Unit"));
+        }
+    }
+    write_header_block(w, &cards)?;
+
+    let mut data: Vec<u8> = Vec::with_capacity(per_row * naxis2);
+    for (brick, m) in entries {
+        // BRICK column: 12 bytes, space-padded
+        let bk = brick.as_bytes();
+        let blen = bk.len().min(BRICK_BYTES);
+        data.extend_from_slice(&bk[..blen]);
+        for _ in blen..BRICK_BYTES { data.push(b' '); }
+        // Measurement columns (same as single-brick writer)
+        data.extend_from_slice(&m.ra.unwrap_or(f64::NAN).to_be_bytes());
+        data.extend_from_slice(&m.dec.unwrap_or(f64::NAN).to_be_bytes());
+        data.extend_from_slice(&m.x_c.to_be_bytes());
+        data.extend_from_slice(&m.y_c.to_be_bytes());
+        data.extend_from_slice(&m.flux_iso.to_be_bytes());
+        data.extend_from_slice(&m.flux_auto.to_be_bytes());
+        data.extend_from_slice(&m.a.to_be_bytes());
+        data.extend_from_slice(&m.b.to_be_bytes());
+        data.extend_from_slice(&m.theta.to_be_bytes());
+        data.extend_from_slice(&m.ellipticity.to_be_bytes());
+        data.extend_from_slice(&m.kron_radius.to_be_bytes());
+        data.extend_from_slice(&(m.npix as i32).to_be_bytes());
+        data.extend_from_slice(&(m.flags as i16).to_be_bytes());
+    }
+    let rem = data.len() % BLOCK;
+    if rem != 0 { data.extend(std::iter::repeat(0u8).take(BLOCK - rem)); }
+    w.write_all(&data)
 }
 
 // ── Primary HDU (empty image) ─────────────────────────────────────────────────

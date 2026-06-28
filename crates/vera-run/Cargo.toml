@@ -1,0 +1,15 @@
+[package]
+name = "vera-run"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "vera-run"
+path = "src/main.rs"
+
+[dependencies]
+vera-fits     = { path = "../vera-fits" }
+vera-pipeline = { path = "../vera-pipeline" }
+vera-catalog  = { path = "../vera-catalog" }
+ndarray       = { workspace = true }
+rayon         = { workspace = true }
