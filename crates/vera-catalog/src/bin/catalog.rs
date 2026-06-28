@@ -1,7 +1,8 @@
 use std::path::Path;
 use vera_fits::read_image_f32;
 use vera_pipeline::background::{BackgroundConfig, BackgroundMap};
-use vera_pipeline::detect::{detect, DetectConfig};
+use vera_pipeline::detect::{detect, detect_gpu, DetectConfig};
+use vera_pipeline::gpu::GpuContext;
 use vera_pipeline::measure::{measure_all, MeasureConfig};
 use vera_catalog::{csv_write, fits_write};
 
@@ -26,6 +27,8 @@ fn main() {
     println!("Input   : {}", path.display());
     println!("Output  : {out_stem}.{{fits,csv}}");
 
+    let gpu = GpuContext::new();
+
     let t0 = std::time::Instant::now();
 
     let (image, wcs) = match read_image_f32(path) {
@@ -35,7 +38,10 @@ fn main() {
     let (nrows, ncols) = image.dim();
 
     let bg_map = BackgroundMap::estimate(&image, &BackgroundConfig::default());
-    let det    = detect(&image, &bg_map, &DetectConfig::default());
+    let det = match gpu.as_ref() {
+        Some(ctx) => detect_gpu(&image, &bg_map, &DetectConfig::default(), ctx),
+        None      => detect(&image, &bg_map, &DetectConfig::default()),
+    };
     let mut meas = measure_all(&image, &bg_map, &det, wcs.as_ref(), &MeasureConfig::default());
 
     // Sort by flux_auto descending (standard catalogue ordering).

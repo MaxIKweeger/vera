@@ -16,7 +16,8 @@ use rayon::prelude::*;
 use vera_catalog::{csv_write, fits_write};
 use vera_fits::read_image_f32;
 use vera_pipeline::background::{BackgroundConfig, BackgroundMap};
-use vera_pipeline::detect::{detect, DetectConfig};
+use vera_pipeline::detect::{detect, detect_gpu, DetectConfig};
+use vera_pipeline::gpu::GpuContext;
 use vera_pipeline::measure::{measure_all, Measurement, MeasureConfig};
 
 // ── Brick discovery ───────────────────────────────────────────────────────────
@@ -50,11 +51,14 @@ fn brick_name(path: &Path) -> String {
 
 // ── Single-brick pipeline ─────────────────────────────────────────────────────
 
-fn process_brick(path: &Path) -> Option<(String, Vec<Measurement>)> {
+fn process_brick(path: &Path, gpu: Option<&GpuContext>) -> Option<(String, Vec<Measurement>)> {
     let name = brick_name(path);
     let (image, wcs) = read_image_f32(path).ok()?;
-    let bg   = BackgroundMap::estimate(&image, &BackgroundConfig::default());
-    let det  = detect(&image, &bg, &DetectConfig::default());
+    let bg  = BackgroundMap::estimate(&image, &BackgroundConfig::default());
+    let det = match gpu {
+        Some(ctx) => detect_gpu(&image, &bg, &DetectConfig::default(), ctx),
+        None      => detect(&image, &bg, &DetectConfig::default()),
+    };
     let meas = measure_all(&image, &bg, &det, wcs.as_ref(), &MeasureConfig::default());
     Some((name, meas))
 }
@@ -137,11 +141,15 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Initialise GPU (once; shared across all Rayon threads via &ref).
+    let gpu = GpuContext::new();
+
     println!("┌── Vera multi-brick pipeline ───────────────────────────────────");
     println!("│  Data dir  : {}", data_dir.display());
     println!("│  Band      : {band}");
     println!("│  Bricks    : {}", bricks.len());
     println!("│  Threads   : {} (Rayon)", rayon::current_num_threads());
+    println!("│  Conv GPU  : {}", if gpu.is_some() { "wgpu (RTX 4070 Ti)" } else { "CPU (rayon)" });
     println!("│  Dedup tol : {tol_arcsec}\"");
     println!("│");
 
@@ -149,12 +157,12 @@ fn main() {
     let total   = bricks.len();
     let t0      = Instant::now();
 
-    // Parallel brick processing → collect per-brick results, then flatten.
+    // Parallel brick processing — &gpu is Sync so can be shared across Rayon threads.
     let brick_results: Vec<(String, Vec<Measurement>)> = bricks
         .par_iter()
         .filter_map(|path| {
             let t      = Instant::now();
-            let result = process_brick(path);
+            let result = process_brick(path, gpu.as_ref());
             let n      = counter.fetch_add(1, Ordering::Relaxed) + 1;
             match &result {
                 Some((brick, meas)) =>

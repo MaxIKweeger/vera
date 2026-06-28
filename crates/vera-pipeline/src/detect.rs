@@ -39,30 +39,46 @@ pub struct DetectionList {
     pub label_map: Array2<u32>,
 }
 
-/// Full detection pipeline: background subtraction → convolution → threshold → label → filter.
+/// Full detection pipeline: background subtraction → CPU convolution → threshold → label → filter.
 pub fn detect(
     image: &Array2<f32>,
     bg_map: &BackgroundMap,
     config: &DetectConfig,
 ) -> DetectionList {
     let residual = bg_map.subtract(image);
-    let rms_map = bg_map.rms();
-
+    let rms_map  = bg_map.rms();
     let filtered = gaussian_smooth(&residual, config.sigma_psf);
+    detect_from_filtered(&filtered, &rms_map, config)
+}
 
-    let (nrows, ncols) = image.dim();
+/// Like `detect` but uses GPU Gaussian convolution.
+pub fn detect_gpu(
+    image: &Array2<f32>,
+    bg_map: &BackgroundMap,
+    config: &DetectConfig,
+    ctx: &crate::gpu::GpuContext,
+) -> DetectionList {
+    let residual = bg_map.subtract(image);
+    let rms_map  = bg_map.rms();
+    let filtered = ctx.gaussian_smooth(&residual, config.sigma_psf);
+    detect_from_filtered(&filtered, &rms_map, config)
+}
 
-    // SNR map: filtered / per-pixel RMS.
+pub fn detect_from_filtered(
+    filtered: &Array2<f32>,
+    rms_map: &Array2<f32>,
+    config: &DetectConfig,
+) -> DetectionList {
+    let (nrows, ncols) = filtered.dim();
+
     let snr_map = Array2::from_shape_fn((nrows, ncols), |(r, c)| {
         let rms = rms_map[[r, c]];
         if rms > 0.0 { filtered[[r, c]] / rms } else { 0.0 }
     });
 
-    let mask = snr_map.mapv(|v| v > config.thresh);
-
-    let label_map = label_connected_components(&mask);
-
-    let detections = collect_detections(&label_map, &snr_map, config.minarea);
+    let mask        = snr_map.mapv(|v| v > config.thresh);
+    let label_map   = label_connected_components(&mask);
+    let detections  = collect_detections(&label_map, &snr_map, config.minarea);
 
     DetectionList { detections, label_map }
 }

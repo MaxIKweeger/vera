@@ -20,3 +20,6 @@ vera-fits = { path = "../vera-fits" }
 ndarray = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
+wgpu = "29"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.3"

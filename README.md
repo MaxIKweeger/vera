@@ -2,8 +2,8 @@
 
 A complete Rust pipeline for detecting and measuring astronomical sources (stars, galaxies)
 in survey images.  Inspired by [SExtractor](https://sextractor.readthedocs.io/) but designed
-for modern hardware: parallel CPU via Rayon, GPU rendering via wgpu/egui, pure-Rust FITS I/O
-with no C dependencies.
+for modern hardware: parallel CPU via Rayon, GPU convolution via wgpu compute shaders,
+GPU rendering via eframe/egui, pure-Rust FITS I/O with no C dependencies.
 
 Validated on 28 DECam bricks from [DESI Legacy Survey DR10](https://www.legacysurvey.org/dr10/)
 around the Virgo Cluster core (M87 / RA ≈ 187.7°, Dec ≈ +12.4°) — the same field imaged in
@@ -40,45 +40,58 @@ vera-catalog    — FITS binary table + CSV export
 vera-viewer     — interactive GPU viewer (eframe 0.35 / egui 0.35)
 ```
 
-For multi-brick processing, `vera-run` runs all steps in parallel across bricks (Rayon)
-and cross-matches sources at brick boundaries to remove duplicates.
+For multi-brick processing, `vera-run` initialises a GPU context once then processes
+all bricks in parallel across bricks (Rayon), sharing the GPU for convolution.
+Sources at brick boundaries are cross-matched to remove duplicates.
 
 ---
 
 ## Performance — Virgo Cluster field, 28 bricks, band r
 
 Measured on **Intel i9-10850K (10c / 20t) · RTX 4070 Ti · 64 GB RAM · Windows 11**.
-Release build (`cargo build --release`).  Each single-brick time is the median of 3 runs.
-GPU temperature monitored throughout via `nvidia-smi` — flat at **32 °C** (idle):
-the pipeline is CPU-only; the GPU is used exclusively by `vera-viewer` for rendering.
+Release build (`cargo build --release`).
+
+### GPU acceleration (Phase 8 — wgpu compute shaders)
+
+Gaussian convolution offloaded to RTX 4070 Ti via two WGSL compute passes (H then V),
+with PCIe 4.0 ×16 transfer.  All other stages (background, CCL, measurements) remain on CPU.
+
+| Convolution | Time (single brick) | Sources |
+|-------------|--------------------:|--------:|
+| CPU (Rayon, 20 t) | 304 ms | 3 576 |
+| **GPU (wgpu WGSL)** | **42 ms** | **3 576** |
+| GPU speedup | **7.2×** | identical |
+
+GPU temperature during vera-run: **~62 °C** (active compute).
+GPU idle temperature (CPU-only run): **~32 °C**.
 
 ### Single brick — `legacysurvey-1877p122-image-r.fits.fz` (3 600 × 3 600 px, ~11 MB)
 
-| Stage | Binary | Wall time |
-|-------|--------|----------:|
-| FITS read + RICE decompress | `vera-background` | ~190 ms |
-| Background estimation (64 px mesh, κ-σ × 10, bilinear) | `vera-background` | **13 ms** |
-| Gaussian convolution (σ = 1.6 px, rayon rows) | `vera-detect` | ~440 ms |
-| SNR map + Union-Find 8-connectivity | `vera-detect` | ~210 ms |
-| Photometric measurements (centroid, moments, Kron) | `vera-measure` | **230 ms** |
-| **Full pipeline (I/O + BG + detect + measure)** | `vera-measure` | **~1.1 s** |
-| + Catalog write (FITS binary table + CSV) | `vera-catalog` | **~1.1 s** |
-| Sources detected | — | **3 576** |
+| Stage | CPU-only | With GPU |
+|-------|:--------:|:--------:|
+| FITS read + RICE decompress | ~190 ms | ~190 ms |
+| Background estimation (64 px mesh, κ-σ × 10, bilinear) | **13 ms** | **13 ms** |
+| Gaussian convolution (σ = 1.6 px) | ~304 ms (Rayon) | **~42 ms** (wgpu) |
+| SNR map + Union-Find 8-connectivity | ~200 ms | ~160 ms |
+| Photometric measurements (centroid, moments, Kron) | **230 ms** | **230 ms** |
+| **Full pipeline (I/O + BG + detect + measure)** | **~1.1 s** | **~0.7 s** |
+| Sources detected | 3 576 | 3 576 |
 
 ### Scale-out — 28 bricks in parallel (vera-run)
 
-| Metric | Value |
-|--------|------:|
-| Bricks processed | 28 |
-| Rayon threads | 20 |
-| Sources detected (raw) | 102 629 |
-| Duplicate pairs removed at brick boundaries (1″ tol.) | 90 |
-| **Final catalog size** | **102 539 sources** |
-| Catalog files | 7.6 MB FITS + 10.3 MB CSV |
-| Median flux_auto | 3.24 nanomaggies |
-| Brightest source (M87 halo) | 148 403 nanomaggies |
-| **Total wall time** | **6.9 s** |
-| Throughput | ~14 900 sources / s |
+| Metric | CPU-only | With GPU |
+|--------|:--------:|:--------:|
+| Bricks processed | 28 | 28 |
+| Rayon threads | 20 | 20 |
+| Sources detected (raw) | 102 629 | 102 629 |
+| Duplicate pairs removed (1″ tol.) | 90 | 90 |
+| **Final catalog size** | **102 539** | **102 539** |
+| Catalog files | 7.6 MB FITS + 10.3 MB CSV | 7.8 MB FITS + 10.6 MB CSV |
+| Median flux_auto | 3.24 nanomaggies | 3.24 nanomaggies |
+| Brightest source (M87 halo) | 148 403 nanomaggies | 148 403 nanomaggies |
+| **Total wall time** | **6.9 s** | **5.4 s** |
+| Throughput | ~14 900 sources / s | ~19 000 sources / s |
+| GPU pipeline speedup | — | **1.3×** |
 
 M87 true nucleus position (SIMBAD J2000): RA = 187.706°, Dec = +12.391°.
 The flux-weighted centroid of the detected blob may differ due to the halo
@@ -172,13 +185,15 @@ vera/
 ├── crates/
 │   ├── vera-fits/              ← FITS/RICE I/O, WCS (fitsrs 0.4)
 │   │   └── src/bin/vera-inspect
-│   ├── vera-pipeline/          ← background · detect · measure (rayon)
+│   ├── vera-pipeline/          ← background · detect · measure (rayon + wgpu)
+│   │   ├── src/gpu.rs          ← GpuContext + gaussian_smooth WGSL shaders
+│   │   ├── src/shaders/gaussian.wgsl
 │   │   └── src/bin/{vera-background, vera-detect, vera-measure}
 │   ├── vera-catalog/           ← FITS binary table + CSV writer (pure Rust)
 │   │   └── src/bin/vera-catalog
 │   ├── vera-viewer/            ← interactive GPU viewer (eframe 0.35)
 │   │   └── src/main.rs → vera-viewer
-│   └── vera-run/               ← multi-brick parallel pipeline
+│   └── vera-run/               ← multi-brick parallel pipeline (GPU + Rayon)
 │       └── src/main.rs → vera-run
 └── fits/                       ← data directory (gitignored, ~1 GB)
 ```
@@ -188,11 +203,12 @@ vera/
 | Module | Algorithm |
 |--------|-----------|
 | `background.rs` | κ-σ clipping (MAD × 1.4826, 3σ, 10 iter), SExtractor mode, bilinear interpolation |
-| `convolve.rs` | Separated Gaussian, rayon-parallel rows |
+| `convolve.rs` | Separated Gaussian, Rayon-parallel rows (CPU fallback) |
+| `gpu.rs` | wgpu compute shaders: 2-pass separable Gaussian (H + V, WGSL, workgroup 16×16) |
 | `detect.rs` | SNR map, Union-Find 8-connectivity connected components |
 | `measure.rs` | Flux-weighted centroid, 2nd-order moments → eigenvalues, Kron radius & flux |
 | `fits_write.rs` | Pure-Rust FITS binary table, big-endian, 2880-byte blocks, no cfitsio |
-| `vera-run/main.rs` | O(N log N) RA-sorted deduplication across bricks |
+| `vera-run/main.rs` | GPU init once, shared across Rayon threads; O(N log N) RA dedup |
 
 ---
 

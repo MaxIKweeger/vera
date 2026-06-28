@@ -1,7 +1,8 @@
 use std::path::Path;
 use vera_fits::read_image_f32;
 use vera_pipeline::background::{BackgroundConfig, BackgroundMap};
-use vera_pipeline::detect::{detect, DetectConfig};
+use vera_pipeline::detect::{detect, detect_gpu, DetectConfig};
+use vera_pipeline::gpu::GpuContext;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -23,24 +24,43 @@ fn main() {
     let (nrows, ncols) = image.dim();
     println!("Taille : {} x {} px\n", ncols, nrows);
 
+    // GPU init (amortised — shader compilation happens once here)
+    let gpu = GpuContext::new();
+
     // Background
     let t = std::time::Instant::now();
     let bg_map = BackgroundMap::estimate(&image, &BackgroundConfig::default());
     let t_bg = t.elapsed();
 
-    // Detection
     let config = DetectConfig { sigma_psf, thresh, minarea };
-    let t = std::time::Instant::now();
-    let result = detect(&image, &bg_map, &config);
-    let t_det = t.elapsed();
 
-    let dets = &result.detections;
+    // CPU detection
+    let t_cpu = std::time::Instant::now();
+    let result_cpu = detect(&image, &bg_map, &config);
+    let t_det_cpu = t_cpu.elapsed();
+
+    // GPU detection (if available)
+    let (t_det_gpu, n_gpu) = if let Some(ref ctx) = gpu {
+        let t = std::time::Instant::now();
+        let r = detect_gpu(&image, &bg_map, &config, ctx);
+        (Some(t.elapsed()), Some(r.detections.len()))
+    } else {
+        (None, None)
+    };
+
+    let dets = &result_cpu.detections;
     let n = dets.len();
 
     println!("┌── Détection ─────────────────────────────────────────────────");
     println!("│  σ_PSF={sigma_psf}px  seuil={thresh}σ  minarea={minarea}px");
-    println!("│  Background : {t_bg:.1?}");
-    println!("│  Détection  : {t_det:.1?}  (convolution + seuillage + labeling)");
+    println!("│  Background  : {t_bg:.1?}");
+    println!("│  Pipeline CPU (rayon)  : {t_det_cpu:.1?}  → {n} sources");
+    if let (Some(tg), Some(ng)) = (t_det_gpu, n_gpu) {
+        let speedup = t_det_cpu.as_secs_f64() / tg.as_secs_f64();
+        println!("│  Pipeline GPU (wgpu)   : {tg:.1?}  → {ng} sources  ({speedup:.1}× speedup)");
+    } else {
+        println!("│  GPU : non disponible");
+    }
     println!("│");
     println!("│  N sources  : {n}");
 

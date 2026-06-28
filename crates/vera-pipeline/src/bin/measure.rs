@@ -1,7 +1,8 @@
 use std::path::Path;
 use vera_fits::read_image_f32;
 use vera_pipeline::background::{BackgroundConfig, BackgroundMap};
-use vera_pipeline::detect::{detect, DetectConfig};
+use vera_pipeline::detect::{detect, detect_gpu, DetectConfig};
+use vera_pipeline::gpu::GpuContext;
 use vera_pipeline::measure::{measure_all, MeasureConfig};
 
 fn main() {
@@ -24,12 +25,24 @@ fn main() {
     let (nrows, ncols) = image.dim();
     println!("Taille : {} x {} px\n", ncols, nrows);
 
+    let gpu = GpuContext::new();
+    if gpu.is_some() {
+        println!("GPU    : initialisé (convolution wgpu)\n");
+    } else {
+        println!("GPU    : non disponible (convolution CPU)\n");
+    }
+
     let t0 = std::time::Instant::now();
     let bg_map = BackgroundMap::estimate(&image, &BackgroundConfig::default());
     let t_bg = t0.elapsed();
 
+    let config = DetectConfig { sigma_psf, thresh, minarea };
+
     let t1 = std::time::Instant::now();
-    let det_result = detect(&image, &bg_map, &DetectConfig { sigma_psf, thresh, minarea });
+    let det_result = match gpu.as_ref() {
+        Some(ctx) => detect_gpu(&image, &bg_map, &config, ctx),
+        None      => detect(&image, &bg_map, &config),
+    };
     let t_det = t1.elapsed();
 
     let t2 = std::time::Instant::now();
@@ -38,7 +51,6 @@ fn main() {
     );
     let t_mes = t2.elapsed();
 
-    // Sort by flux_auto descending for display.
     measurements.sort_by(|a, b| b.flux_auto.partial_cmp(&a.flux_auto).unwrap());
 
     let n = measurements.len();
@@ -48,11 +60,13 @@ fn main() {
     fs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let flux_median = fs[fs.len() / 2];
 
+    let conv_label = if gpu.is_some() { "GPU (wgpu)" } else { "CPU (rayon)" };
+
     println!("┌── Pipeline complet ──────────────────────────────────────────");
-    println!("│  Background : {t_bg:.1?}");
-    println!("│  Détection  : {t_det:.1?}");
-    println!("│  Mesures    : {t_mes:.1?}");
-    println!("│  TOTAL      : {:.1?}", t0.elapsed());
+    println!("│  Background  : {t_bg:.1?}");
+    println!("│  Détection ({conv_label}) : {t_det:.1?}");
+    println!("│  Mesures     : {t_mes:.1?}");
+    println!("│  TOTAL       : {:.1?}", t0.elapsed());
     println!("│");
     println!("│  N sources    : {n}");
     println!("│  flux_auto    : médiane={flux_median:.4}  moy={flux_mean:.4}  (nanomaggies)");

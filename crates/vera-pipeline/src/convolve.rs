@@ -12,7 +12,7 @@ pub fn gaussian_smooth(image: &Array2<f32>, sigma: f32) -> Array2<f32> {
 }
 
 /// 1-D normalised Gaussian kernel, truncated at `truncate * sigma` on each side.
-fn gaussian_1d(sigma: f32, truncate: f32) -> Vec<f32> {
+pub fn gaussian_1d(sigma: f32, truncate: f32) -> Vec<f32> {
     let radius = (truncate * sigma).ceil() as usize;
     let s2 = 2.0 * sigma * sigma;
     let mut k: Vec<f32> = (0..=2 * radius)
