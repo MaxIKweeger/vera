@@ -1,0 +1,14 @@
+[package]
+name = "vera-python"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "_vera"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+vera-fits = { path = "../vera-fits" }
+vera-pipeline = { path = "../vera-pipeline" }
+rayon = { workspace = true }

@@ -164,6 +164,52 @@ vera-run fits/ r vera-virgo
 └───────────────────────────────────────────────────────────────
 ```
 
+### Python interface
+
+Vera exposes a Python API via [PyO3](https://pyo3.rs) + [maturin](https://maturin.rs).
+The Rust pipeline runs at full speed; the result is a plain Python list of dicts,
+trivially convertible to pandas or astropy.
+
+**Install (one-time)**
+
+```bash
+pip install maturin
+cd crates/vera-python
+maturin develop --release   # installs `vera` into the active Python env
+```
+
+**Usage**
+
+```python
+import vera
+import pandas as pd
+from astropy.table import Table
+
+# ── Single brick ───────────────────────────────────────────────────────────────
+sources = vera.process_brick("fits/legacysurvey-1877p122-image-r.fits.fz")
+# → list of dicts, one per detected source
+
+df = pd.DataFrame(sources)
+print(df[["ra", "dec", "flux_auto", "a", "b"]].head(10))
+
+# ── All 28 bricks (same as vera-run) ──────────────────────────────────────────
+sources = vera.run("fits/", band="r")                  # dedup_arcsec=1.0 by default
+print(f"{len(sources)} sources in the Virgo Cluster")  # → 102 539
+
+t = Table(rows=sources)
+t["flux_auto"].unit = "nanomaggy"
+t.write("vera-virgo.ecsv", overwrite=True)
+
+# ── Sort by brightness ─────────────────────────────────────────────────────────
+df = pd.DataFrame(sources).sort_values("flux_auto", ascending=False)
+print(df.iloc[0])   # M87 halo ~ 148 403 nanomaggies
+```
+
+Each dict contains: `label`, `npix`, `x`, `y`, `ra`, `dec`, `a`, `b`, `theta`,
+`ellipticity`, `kron_radius`, `flux_iso`, `flux_auto`, `flags`.
+
+---
+
 ### Interactive viewer
 
 ```bash
@@ -204,8 +250,12 @@ vera/
 │   │   └── src/bin/vera-catalog
 │   ├── vera-viewer/            ← interactive GPU viewer (eframe 0.35)
 │   │   └── src/main.rs → vera-viewer
-│   └── vera-run/               ← multi-brick parallel pipeline (GPU + Rayon)
-│       └── src/main.rs → vera-run
+│   ├── vera-run/               ← multi-brick parallel pipeline (GPU + Rayon)
+│   │   └── src/main.rs → vera-run
+│   └── vera-python/            ← Python bindings (PyO3 + maturin)
+│       ├── pyproject.toml
+│       ├── src/lib.rs          ← process_brick() + run()
+│       └── python/vera/__init__.py
 └── fits/                       ← data directory (gitignored, ~1 GB)
 ```
 
