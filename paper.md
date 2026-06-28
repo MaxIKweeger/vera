@@ -114,7 +114,7 @@ Measured on a consumer desktop (Intel i9-10850K 10c/20t, NVIDIA RTX 4070 Ti,
 | SNR map + Union-Find CCL | CPU | ~160 ms |
 | Centroid + 2nd-order moments | CPU Rayon | ~30 ms |
 | Kron aperture flux | GPU wgpu WGSL | ~10 ms |
-| **Total** | | **~0.7 s · 3 576 sources** |
+| **Total** | CPU + GPU | **~0.7 s · 3 576 sources** |
 
 **28 bricks in parallel** (`vera-run`, 20 Rayon threads):
 
