@@ -51,47 +51,41 @@ Sources at brick boundaries are cross-matched to remove duplicates.
 Measured on **Intel i9-10850K (10c / 20t) · RTX 4070 Ti · 64 GB RAM · Windows 11**.
 Release build (`cargo build --release`).
 
-### GPU acceleration (Phase 8 — wgpu compute shaders)
-
-Gaussian convolution offloaded to RTX 4070 Ti via two WGSL compute passes (H then V),
-with PCIe 4.0 ×16 transfer.  All other stages (background, CCL, measurements) remain on CPU.
-
-| Convolution | Time (single brick) | Sources |
-|-------------|--------------------:|--------:|
-| CPU (Rayon, 20 t) | 304 ms | 3 576 |
-| **GPU (wgpu WGSL)** | **42 ms** | **3 576** |
-| GPU speedup | **7.2×** | identical |
-
-GPU temperature during vera-run: **~62 °C** (active compute).
-GPU idle temperature (CPU-only run): **~32 °C**.
-
 ### Single brick — `legacysurvey-1877p122-image-r.fits.fz` (3 600 × 3 600 px, ~11 MB)
 
-| Stage | CPU-only | With GPU |
-|-------|:--------:|:--------:|
-| FITS read + RICE decompress | ~190 ms | ~190 ms |
-| Background estimation (64 px mesh, κ-σ × 10, bilinear) | **13 ms** | **13 ms** |
-| Gaussian convolution (σ = 1.6 px) | ~304 ms (Rayon) | **~42 ms** (wgpu) |
-| SNR map + Union-Find 8-connectivity | ~200 ms | ~160 ms |
-| Photometric measurements (centroid, moments, Kron) | **230 ms** | **230 ms** |
-| **Full pipeline (I/O + BG + detect + measure)** | **~1.1 s** | **~0.7 s** |
-| Sources detected | 3 576 | 3 576 |
+GPU temperature during processing: ~62 °C.
+
+| Stage | Backend | Time |
+|-------|---------|-----:|
+| FITS read + RICE decompress | CPU (fitsrs) | ~190 ms |
+| Background estimation (64 px mesh, κ-σ × 10, bilinear) | CPU Rayon | **13 ms** |
+| Gaussian convolution (σ = 1.6 px) | **GPU wgpu WGSL** | **42 ms** |
+| SNR map + Union-Find 8-connectivity | CPU | ~160 ms |
+| Centroid + moments (flux-weighted, 2nd order) | CPU Rayon | ~30 ms |
+| Kron aperture flux | **GPU wgpu WGSL** | ~10 ms |
+| **Full pipeline (I/O + BG + detect + measure)** | | **~0.7 s** |
+| Sources detected | | **3 576** |
 
 ### Scale-out — 28 bricks in parallel (vera-run)
 
-| Metric | CPU-only | With GPU |
-|--------|:--------:|:--------:|
-| Bricks processed | 28 | 28 |
-| Rayon threads | 20 | 20 |
-| Sources detected (raw) | 102 629 | 102 629 |
-| Duplicate pairs removed (1″ tol.) | 90 | 90 |
-| **Final catalog size** | **102 539** | **102 539** |
-| Catalog files | 7.6 MB FITS + 10.3 MB CSV | 7.8 MB FITS + 10.6 MB CSV |
-| Median flux_auto | 3.24 nanomaggies | 3.24 nanomaggies |
-| Brightest source (M87 halo) | 148 403 nanomaggies | 148 403 nanomaggies |
-| **Total wall time** | **6.9 s** | **4.8 s** |
-| Throughput | ~14 900 sources / s | ~21 400 sources / s |
-| GPU pipeline speedup | — | **1.4×** |
+| Stage | Backend |
+|-------|---------|
+| Gaussian convolution | **GPU wgpu WGSL** (one job per brick, serialised on GPU queue) |
+| Background, CCL, centroid, moments | CPU Rayon (20 threads) |
+| Kron aperture flux | CPU Rayon — GPU already saturated by 20 parallel conv jobs |
+
+| Metric | Value |
+|--------|------:|
+| Bricks processed | 28 |
+| Rayon threads | 20 |
+| Sources detected (raw) | 102 629 |
+| Duplicate pairs removed (1″ tol.) | 90 |
+| **Final catalog size** | **102 539 sources** |
+| Catalog files | 7.8 MB FITS + 10.6 MB CSV |
+| Median flux_auto | 3.24 nanomaggies |
+| Brightest source (M87 halo) | 148 403 nanomaggies |
+| **Total wall time** | **4.7 s** |
+| Throughput | ~21 800 sources / s |
 
 M87 true nucleus position (SIMBAD J2000): RA = 187.706°, Dec = +12.391°.
 The flux-weighted centroid of the detected blob may differ due to the halo

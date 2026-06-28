@@ -28,7 +28,7 @@ speedup over the CPU implementation on an NVIDIA RTX 4070 Ti.
 Vera was validated on 28 DECam *r*-band bricks from the DESI Legacy Imaging Survey
 DR10 [@dey2019] covering the Virgo Cluster core (M87; RA ≈ 187.7°, Dec ≈ +12.4°),
 the same field captured in the Vera C. Rubin Observatory first-light image. The
-pipeline processes all 28 bricks (28 × 3600 × 3600 pixels) in **4.8 seconds** and
+pipeline processes all 28 bricks (28 × 3600 × 3600 pixels) in **4.7 seconds** and
 produces a catalogue of 102 539 sources on a consumer desktop (Intel i9-10850K,
 RTX 4070 Ti, 64 GB RAM, Windows 11).
 
@@ -89,24 +89,44 @@ moments); the second-order moments → semi-major axis *a*, semi-minor axis *b*,
 position angle θ; the ellipticity ε = 1 − *b*/*a*; isophotal flux (sum over all
 connected pixels); and the automatic aperture flux *f*_auto using the Kron radius
 [@kron1980], defined as the first-moment radius within an elliptical aperture of
-2.5 × *a*_IMAGE × *b*_IMAGE. World coordinate system (WCS) positions (RA, Dec) are
-computed from pixel centroids using the TAN projection encoded in the FITS header.
-Source flags identify edge truncations (0x01) and saturated pixels (0x04).
+2.5 × *a*_IMAGE × *b*_IMAGE. Centroid and moment computations run on the CPU
+(Rayon-parallelised over detections). The Kron aperture flux, which requires scanning
+a variable-size elliptical region around each source, runs as a WGSL compute shader
+(one 256-thread workgroup per detection, workgroup shared-memory reduction) when a
+single image is processed; in the parallel multi-brick pipeline, this stage uses CPU
+Rayon to avoid contention on the GPU queue already occupied by convolution jobs.
+World coordinate system (WCS) positions (RA, Dec) are computed from pixel centroids
+using the TAN projection encoded in the FITS header. Source flags identify edge
+truncations (0x01) and saturated pixels (0x04).
 
 # Performance
 
-On 28 DECam *r*-band bricks (3600 × 3600 pixels each, RICE-compressed):
+Measured on a consumer desktop (Intel i9-10850K 10c/20t, NVIDIA RTX 4070 Ti,
+64 GB RAM, Windows 11) on 28 DECam *r*-band bricks (3600 × 3600 px, RICE-compressed).
 
-| Stage | CPU-only | GPU (RTX 4070 Ti) |
-|---|---:|---:|
-| Gaussian convolution (per brick) | 304 ms | **42 ms** (7.2×) |
-| Full pipeline (28 bricks, 20 threads) | 6.9 s | **4.8 s** (1.4×) |
-| Final catalogue | 102 539 sources | 102 539 sources |
+**Single brick** (`vera-catalog`, `vera-measure`):
 
-The modest overall speedup (1.4×) relative to the convolution speedup (7.2×) reflects
-that background estimation, CCL, and photometry remain on the CPU, and that
-20 Rayon threads compete for a single GPU. Source counts are identical between the
-CPU and GPU paths, confirming numerical equivalence.
+| Stage | Backend | Time |
+|---|---|---:|
+| FITS read + RICE decompress | CPU (fitsrs) | ~190 ms |
+| Background estimation | CPU Rayon | 13 ms |
+| Gaussian convolution (σ = 1.6 px) | GPU wgpu WGSL | 42 ms |
+| SNR map + Union-Find CCL | CPU | ~160 ms |
+| Centroid + 2nd-order moments | CPU Rayon | ~30 ms |
+| Kron aperture flux | GPU wgpu WGSL | ~10 ms |
+| **Total** | | **~0.7 s · 3 576 sources** |
+
+**28 bricks in parallel** (`vera-run`, 20 Rayon threads):
+
+| Stage | Backend |
+|---|---|
+| Gaussian convolution | GPU wgpu WGSL |
+| Background, CCL, centroid, moments, Kron | CPU Rayon |
+
+Total wall time: **4.7 s · 102 539 sources** (~21 800 sources/s).
+Kron flux uses CPU Rayon in this mode because the GPU queue is already saturated
+by 20 simultaneous convolution jobs; adding GPU Kron introduces contention that
+negates any gain.
 
 # Acknowledgements
 
