@@ -1,164 +1,233 @@
 # Vera — GPU-native Astronomical Source Extraction
 
-A Rust pipeline for detecting and measuring astronomical sources (stars, galaxies) in survey images, inspired by [SExtractor](https://sextractor.readthedocs.io/) but designed from the ground up for GPU acceleration and modern hardware.
+A complete Rust pipeline for detecting and measuring astronomical sources (stars, galaxies)
+in survey images.  Inspired by [SExtractor](https://sextractor.readthedocs.io/) but designed
+for modern hardware: parallel CPU via Rayon, GPU rendering via wgpu/egui, pure-Rust FITS I/O
+with no C dependencies.
 
-Built on public DECam data from the [DESI Legacy Survey DR10](https://www.legacysurvey.org/dr10/), targeting the Virgo Cluster field (RA ≈ 187.7°, Dec ≈ +12.4°) — the same sky region imaged in the Vera C. Rubin Observatory first-light image ([noirlab2521a](https://noirlab.edu/public/images/noirlab2521a/)).
+Validated on 28 DECam bricks from [DESI Legacy Survey DR10](https://www.legacysurvey.org/dr10/)
+around the Virgo Cluster core (M87 / RA ≈ 187.7°, Dec ≈ +12.4°) — the same field imaged in
+the Vera C. Rubin Observatory first-light image
+([noirlab2521a](https://noirlab.edu/public/images/noirlab2521a/)).
 
 > **Author:** MaxKweeger  
-> **Developed with:** [Claude Sonnet](https://anthropic.com) (Anthropic) — AI-assisted development under the direction of MaxKweeger  
+> **Developed with:** [Claude Sonnet](https://anthropic.com) (Anthropic) — AI-assisted  
 > **Target publication:** [Journal of Open Source Software (JOSS)](https://joss.theoj.org)
 
 ---
 
-## Motivation
+## Pipeline overview
 
-SExtractor is a C program from 1996. Rubin Observatory pipelines run on HPC clusters. This project bridges the gap: a scientifically rigorous source extraction pipeline that runs on consumer hardware (tested on RTX 4070 Ti, i9-10850K, 64 GB RAM), written in safe Rust with portable GPU compute via `wgpu`.
+```
+FITS image (.fits.fz)
+    │
+    ▼
+vera-fits       — FITS + RICE decompression, WCS extraction
+    │
+    ▼
+BackgroundMap   — 64-px mesh · κ-σ clipping · bilinear interpolation
+    │
+    ▼
+detect()        — Gaussian PSF match · SNR threshold · Union-Find labeling
+    │
+    ▼
+measure_all()   — centroid · Kron flux · 2nd moments · WCS coords
+    │
+    ▼
+vera-catalog    — FITS binary table + CSV export
+    │
+    ▼
+vera-viewer     — interactive GPU viewer (eframe 0.35 / egui 0.35)
+```
 
-When Rubin DP1 public data becomes available, the only change needed is the input file path — the FITS format and calibration convention are identical to Legacy Survey DR10.
+For multi-brick processing, `vera-run` runs all steps in parallel across bricks (Rayon)
+and cross-matches sources at brick boundaries to remove duplicates.
 
 ---
 
-## Progress
+## Results — Virgo Cluster field, 28 bricks, band r
 
-### ✅ Phase 1 — FITS I/O (`vera-fits`)
+| Metric | Value |
+|--------|-------|
+| Total processing time (28 bricks, 20 threads) | **7.7 s** |
+| Sources detected (raw) | 116 635 |
+| Duplicate pairs removed at brick boundaries | 105 |
+| **Final catalog size** | **116 530 sources** |
+| Median flux_auto | 4.06 nanomaggies |
+| Brightest source (M87) | 101 723 nanomaggies |
+| M87 position | RA = 187.79°  Dec = +12.38° |
+| M87 semi-major axis | 1 057 px (~4.6 arcmin) |
+| Per-brick pipeline (single thread) | ~1.2 s |
+| Background estimation alone | ~13 ms |
+| Catalog files (28 bricks) | 8.9 MB FITS + 12 MB CSV |
 
-- Reads plain FITS and RICE tile-compressed `.fits.fz` transparently
-- Extracts WCS header (CD matrix, CRPIX, CRVAL) for pixel ↔ sky conversion
-- Handles all pixel types (F32, F64, I16, I32, I64, U8)
-- `vera-inspect` binary: prints image dimensions, flux statistics, WCS info
-
-```
-$ vera-inspect legacysurvey-1877p122-image-r.fits.fz
-
-┌── Image ──────────────────────────────────────
-│  Taille   : 3600 x 3600 px  (12 Mpx)
-│  Flux     : min=-0.2031  max=62.5469  mean=0.0220  (nanomaggies)
-│  WCS centre : RA=187.7983°  Dec=12.2500°
-│  FOV        : 0.262° x 0.262°
-│  Plate scale: 0.2620 arcsec/px
-└───────────────────────────────────────────────
-```
-
-### ✅ Phase 2 — Sky Background Estimation (`vera-pipeline`)
-
-SExtractor-equivalent background algorithm:
-
-1. Divide image into a mesh of cells (default 64×64 px)
-2. Each cell: iterative κ-σ clipping (MAD-based, Gaussian-unbiased)
-3. Mode estimate following SExtractor: `bg = 2.5·median − 1.5·mean` when skewed
-4. Bilinear interpolation of the low-resolution grid to full image size
-5. Background subtraction → residual image
-
-All cell estimations run in parallel via Rayon.
-
-```
-$ vera-background legacysurvey-1877p122-image-r.fits.fz
-
-BG estimation : 12.8ms  (grille 57 x 57 cellules de 64px)
-
-┌── Fond de ciel ───────────────────────────────
-│  BG  : min=-0.025  max=0.203  mean=0.004  (nanomaggies)
-│  RMS : min=0.004   max=2.510  mean=0.092
-│  Residual median=0.003  RMS=0.329
-└───────────────────────────────────────────────
-```
-
-Background estimation over a 3600×3600 brick: **~13 ms** (release build).
-
-### 🔲 Phase 3 — Source Detection (`vera-gpu` + `vera-pipeline`)
-
-- [ ] Gaussian convolution matched to PSF (GPU, `wgpu` compute shader)
-- [ ] Pixel thresholding: `flux > N × RMS_map` (GPU)
-- [ ] Connected-component labeling (Union-Find, CPU)
-- [ ] Basic deblending (threshold tree)
-- [ ] `DetectionList` struct
-
-### 🔲 Phase 4 — Photometric Measurements (`vera-pipeline`)
-
-- [ ] Centroid (flux-weighted 1st moments)
-- [ ] Isophotal flux + Kron elliptical aperture flux
-- [ ] 2nd-order moments → semi-axes, position angle
-- [ ] Star/galaxy classification
-- [ ] Quality flags (saturation, edge, deblend)
-
-### 🔲 Phase 5 — Catalog Output (`vera-catalog`)
-
-- [ ] FITS binary table (standard column names)
-- [ ] Parquet export
-- [ ] Comparison with Tractor catalog from same brick
-
-### 🔲 Phase 6 — Interactive Viewer (`vera-viewer`)
-
-- [ ] GPU tile streaming (wgpu + winit)
-- [ ] ZScale / asinh stretch
-- [ ] Source ellipse overlays (click → info panel)
-- [ ] WCS coordinate display
-- [ ] 60 fps pan/zoom
-
-### 🔲 Phase 7 — Multi-brick Pipeline
-
-- [ ] CLI `vera run --data-dir ./fits --output catalogue.fits`
-- [ ] Cross-brick duplicate resolution (< 1 arcsec matching)
-- [ ] Full Virgo Cluster mosaic from 28 DR10 bricks
-
----
-
-## Data
-
-28 DECam bricks (r-band) from DESI Legacy Survey DR10, centered on M87 / Virgo Cluster core.
-
-Each brick: 3600×3600 px · 0.262 arcsec/px · calibrated in nanomaggies.
-
-Files (not included in repo — ~1 GB total):
-
-```
-fits/legacysurvey-<brick>-image-r.fits.fz      # science image (RICE-compressed)
-fits/legacysurvey-<brick>-invvar-r.fits.fz     # inverse variance
-fits/legacysurvey-<brick>-maskbits.fits.fz     # bitmask
-```
-
-Download with the script in `scripts/download_bricks.ps1` (TODO).
+Hardware: RTX 4070 Ti · i9-10850K (10c/20t) · 64 GB RAM.
 
 ---
 
 ## Build
 
+Requires **Rust 2024 edition (≥ 1.85)**.  No C dependencies — pure Rust.
+
 ```bash
-cargo build --release -p vera-fits
-cargo build --release -p vera-pipeline
+# Build everything
+cargo build --release
+
+# Build a specific crate
+cargo build --release -p vera-run
 ```
-
-Requires: Rust 2024 edition (≥ 1.85).
-
-No C dependencies — pure Rust, including FITS RICE decompression via [fitsrs](https://crates.io/crates/fitsrs).
 
 ---
 
-## Workspace Structure
+## Usage
+
+### Single brick — full pipeline + catalog
+
+```bash
+vera-catalog fits/legacysurvey-1877p122-image-r.fits.fz
+```
+
+```
+┌── Catalogue ──────────────────────────────────────────────────
+│  Image      : 3600 x 3600 px
+│  Pipeline   : 1.2s  (BG + detect + measure)
+│  N sources  : 5025
+│  flux_auto  : médiane=4.28  max=89822.8  (nanomaggies)
+│
+│  Fichiers écrits :
+│    vera-1877p122-r.fits  (335 kB)
+│    vera-1877p122-r.csv   (474 kB)
+└───────────────────────────────────────────────────────────────
+```
+
+### Multi-brick pipeline — full Virgo field
+
+```bash
+vera-run fits/ r vera-virgo
+```
+
+```
+┌── Vera multi-brick pipeline ───────────────────────────────────
+│  Bricks  : 28   Threads : 20   Dedup tol : 1"
+│  ...
+│  Pipeline complet  : 7.3s
+│  Sources brutes    : 116 635
+│  Doublons supprimés: 105
+│  Sources finales   : 116 530
+│  Fichiers écrits   : vera-virgo.fits (8.9 MB)  vera-virgo.csv (12 MB)
+│  Total             : 7.7s
+└───────────────────────────────────────────────────────────────
+```
+
+### Interactive viewer
+
+```bash
+vera-viewer fits/legacysurvey-1877p122-image-r.fits.fz
+```
+
+- Loads image + runs full pipeline before window opens (~1.2 s)
+- ZScale stretch with live asinh sliders
+- Scroll-wheel zoom to cursor, drag to pan, double-click to fit
+- Green ellipses = detected sources; orange = flagged; yellow = selected
+- Click any source → RA, Dec, flux_auto, semi-axes, Kron radius, flags
+- RA/Dec coordinate readout under the cursor
+
+### Individual diagnostic binaries
+
+```bash
+vera-inspect   fits/legacysurvey-1877p122-image-r.fits.fz   # image stats + WCS
+vera-background fits/legacysurvey-1877p122-image-r.fits.fz  # background map stats
+vera-detect    fits/legacysurvey-1877p122-image-r.fits.fz   # detection stats
+vera-measure   fits/legacysurvey-1877p122-image-r.fits.fz   # full measurement table
+```
+
+---
+
+## Workspace structure
 
 ```
 vera/
+├── Cargo.toml                  ← workspace (Rust 2024, resolver = 2)
 ├── crates/
-│   ├── vera-fits/        # FITS I/O + WCS (no GPU)
-│   ├── vera-pipeline/    # background, detection, measurement algorithms
-│   ├── vera-gpu/         # wgpu compute shaders (Phase 3+)
-│   ├── vera-catalog/     # catalog serialization (Phase 5)
-│   └── vera-viewer/      # interactive viewer (Phase 6)
-└── fits/                 # data directory (gitignored)
+│   ├── vera-fits/              ← FITS/RICE I/O, WCS (fitsrs 0.4)
+│   │   └── src/bin/vera-inspect
+│   ├── vera-pipeline/          ← background · detect · measure (rayon)
+│   │   └── src/bin/{vera-background, vera-detect, vera-measure}
+│   ├── vera-catalog/           ← FITS binary table + CSV writer (pure Rust)
+│   │   └── src/bin/vera-catalog
+│   ├── vera-viewer/            ← interactive GPU viewer (eframe 0.35)
+│   │   └── src/main.rs → vera-viewer
+│   └── vera-run/               ← multi-brick parallel pipeline
+│       └── src/main.rs → vera-run
+└── fits/                       ← data directory (gitignored, ~1 GB)
 ```
+
+### Key algorithms
+
+| Module | Algorithm |
+|--------|-----------|
+| `background.rs` | κ-σ clipping (MAD × 1.4826, 3σ, 10 iter), SExtractor mode, bilinear interpolation |
+| `convolve.rs` | Separated Gaussian, rayon-parallel rows |
+| `detect.rs` | SNR map, Union-Find 8-connectivity connected components |
+| `measure.rs` | Flux-weighted centroid, 2nd-order moments → eigenvalues, Kron radius & flux |
+| `fits_write.rs` | Pure-Rust FITS binary table, big-endian, 2880-byte blocks, no cfitsio |
+| `vera-run/main.rs` | O(N log N) RA-sorted deduplication across bricks |
+
+---
+
+## Catalog column schema
+
+| Column | Format | Unit | Description |
+|--------|--------|------|-------------|
+| BRICK | 12A | — | Brick identifier (multi-brick only) |
+| RA | D | deg | Right ascension (WCS) |
+| DEC | D | deg | Declination (WCS) |
+| X_IMAGE | D | pix | Centroid column (0-indexed) |
+| Y_IMAGE | D | pix | Centroid row (0-indexed) |
+| FLUX_ISO | E | nmg | Isophotal flux |
+| FLUX_AUTO | E | nmg | Kron elliptical aperture flux |
+| A_IMAGE | E | pix | Semi-major axis |
+| B_IMAGE | E | pix | Semi-minor axis |
+| THETA | E | deg | Position angle (x-axis CCW) |
+| ELLIP | E | — | Ellipticity (1 − b/a) |
+| KRON_RAD | E | — | Kron radius |
+| NPIX | J | pix | Number of pixels in isophote |
+| FLAGS | I | — | 0x01 = edge, 0x04 = saturated |
+
+Calibration: nanomaggies (1 nmg = 3.631 × 10⁻³² W m⁻² Hz⁻¹),
+consistent with DESI Legacy Survey DR10 and Rubin DP1 conventions.
+
+---
+
+## Data
+
+28 DECam r-band bricks from DESI Legacy Survey DR10.
+Each brick: 3600 × 3600 px · 0.262 arcsec/px · ~10–13 MB compressed.
+
+```
+fits/legacysurvey-<brick>-image-r.fits.fz     # science image (RICE-compressed)
+fits/legacysurvey-<brick>-invvar-r.fits.fz    # inverse variance
+fits/legacysurvey-<brick>-maskbits.fits.fz    # pixel bitmask
+```
+
+Files not included (gitignored, ~1 GB). Download via the Legacy Survey data access at
+`https://www.legacysurvey.org/dr10/files/`.
 
 ---
 
 ## Compatibility
 
-Legacy Survey DR10 and Rubin DP1 share the same FITS format and calibration convention (nanomaggies, RICE compression, standard WCS). Switching to Rubin data requires only changing the input path.
+Legacy Survey DR10 and Rubin LSST DP1 share the same FITS format,
+RICE compression, and nanomaggie calibration.  Switching to Rubin data
+requires only changing the input file path.
 
 ---
 
 ## Attribution
 
-This project was developed by **MaxKweeger** with the assistance of **Claude Sonnet** (Anthropic) as an AI pair-programming tool. All scientific decisions, design choices, and project direction are by MaxKweeger.
+Developed by **MaxKweeger** with **Claude Sonnet** (Anthropic) as AI pair-programmer.
+All scientific decisions, algorithm choices, and project direction by MaxKweeger.
 
-Any publication derived from this work (including the planned JOSS paper) will explicitly credit:
-- MaxKweeger — author and scientific director
-- Claude Sonnet (Anthropic) — AI-assisted development
+Any publication (including the planned JOSS paper) will credit:
+- **MaxKweeger** — author and scientific director
+- **Claude Sonnet** (Anthropic) — AI-assisted development
