@@ -11,6 +11,10 @@ path = "src/bin/background.rs"
 name = "vera-detect"
 path = "src/bin/detect.rs"
 
+[[bin]]
+name = "vera-measure"
+path = "src/bin/measure.rs"
+
 [dependencies]
 vera-fits = { path = "../vera-fits" }
 ndarray = { workspace = true }
