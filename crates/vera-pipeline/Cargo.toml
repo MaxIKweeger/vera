@@ -7,6 +7,10 @@ edition = "2024"
 name = "vera-background"
 path = "src/bin/background.rs"
 
+[[bin]]
+name = "vera-detect"
+path = "src/bin/detect.rs"
+
 [dependencies]
 vera-fits = { path = "../vera-fits" }
 ndarray = { workspace = true }
