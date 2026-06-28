@@ -286,3 +286,12 @@ All scientific decisions, algorithm choices, and project direction by MaxKweeger
 Any publication (including the planned JOSS paper) will credit:
 - **MaxKweeger** — author and scientific director
 - **Claude Sonnet** (Anthropic) — AI-assisted development
+
+---
+
+## License
+
+MIT License — Copyright (c) 2026 MaxKweeger.
+
+Free to use, modify, and distribute for any purpose (including commercial) provided
+the copyright notice is retained. See [LICENSE](LICENSE) for full text.
