@@ -142,14 +142,28 @@ vera-run fits/ r vera-virgo
 
 ```
 ┌── Vera multi-brick pipeline ───────────────────────────────────
-│  Bricks  : 28   Threads : 20   Dedup tol : 1"
+│  Data dir  : fits/
+│  Band      : r
+│  Bricks    : 28   Threads : 20   Dedup tol : 1"
+│  Conv GPU  : wgpu (RTX 4070 Ti)
+│
+│  [ 1/28] 1877p122  →  3576 sources  (1.84s)
 │  ...
-│  Pipeline complet  : 6.6s
-│  Sources brutes    : 102 629
-│  Doublons supprimés: 90
-│  Sources finales   : 102 539
-│  Fichiers écrits   : vera-virgo.fits (7.6 MB)  vera-virgo.csv (10.3 MB)
-│  Total             : 6.9s
+│  [28/28] 2002p107  →  3213 sources  (1.93s)
+│
+│  Pipeline complet : 5.1s
+│  Sources brutes   : 102 629
+│  Doublons supprimés : 90  (4.4ms)
+│  Sources finales    : 102 539
+│
+│  Statistiques flux_auto (nanomaggies) :
+│    médiane = 3.2400   max = 148403.1
+│
+│  Fichiers écrits :
+│    vera-virgo.fits  (7784 kB, 3.8s)
+│    vera-virgo.csv   (10589 kB, 0.5s)
+│
+│  Total : 5.4s
 └───────────────────────────────────────────────────────────────
 ```
 
