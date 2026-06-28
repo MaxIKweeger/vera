@@ -45,24 +45,44 @@ and cross-matches sources at brick boundaries to remove duplicates.
 
 ---
 
-## Results — Virgo Cluster field, 28 bricks, band r
+## Performance — Virgo Cluster field, 28 bricks, band r
+
+Measured on **Intel i9-10850K (10c / 20t) · RTX 4070 Ti · 64 GB RAM · Windows 11**.
+Release build (`cargo build --release`).  Each single-brick time is the median of 3 runs.
+GPU temperature monitored throughout via `nvidia-smi` — flat at **32 °C** (idle):
+the pipeline is CPU-only; the GPU is used exclusively by `vera-viewer` for rendering.
+
+### Single brick — `legacysurvey-1877p122-image-r.fits.fz` (3 600 × 3 600 px, ~11 MB)
+
+| Stage | Binary | Wall time |
+|-------|--------|----------:|
+| FITS read + RICE decompress | `vera-background` | ~190 ms |
+| Background estimation (64 px mesh, κ-σ × 10, bilinear) | `vera-background` | **13 ms** |
+| Gaussian convolution (σ = 1.6 px, rayon rows) | `vera-detect` | ~440 ms |
+| SNR map + Union-Find 8-connectivity | `vera-detect` | ~210 ms |
+| Photometric measurements (centroid, moments, Kron) | `vera-measure` | **230 ms** |
+| **Full pipeline (I/O + BG + detect + measure)** | `vera-measure` | **~1.1 s** |
+| + Catalog write (FITS binary table + CSV) | `vera-catalog` | **~1.1 s** |
+| Sources detected | — | **3 576** |
+
+### Scale-out — 28 bricks in parallel (vera-run)
 
 | Metric | Value |
-|--------|-------|
-| Total processing time (28 bricks, 20 threads) | **7.7 s** |
-| Sources detected (raw) | 116 635 |
-| Duplicate pairs removed at brick boundaries | 105 |
-| **Final catalog size** | **116 530 sources** |
-| Median flux_auto | 4.06 nanomaggies |
-| Brightest source (M87 halo) | 101 723 nanomaggies |
-| M87 true nucleus position | RA = 187.706°  Dec = +12.391° (J2000) |
-| M87 detected blob centroid | RA ≈ 187.79°  Dec ≈ +12.38° (flux-weighted, truncated at brick edge) |
-| M87 semi-major axis | 1 057 px (~4.6 arcmin) |
-| Per-brick pipeline (single thread) | ~1.2 s |
-| Background estimation alone | ~13 ms |
-| Catalog files (28 bricks) | 8.9 MB FITS + 12 MB CSV |
+|--------|------:|
+| Bricks processed | 28 |
+| Rayon threads | 20 |
+| Sources detected (raw) | 102 629 |
+| Duplicate pairs removed at brick boundaries (1″ tol.) | 90 |
+| **Final catalog size** | **102 539 sources** |
+| Catalog files | 7.6 MB FITS + 10.3 MB CSV |
+| Median flux_auto | 3.24 nanomaggies |
+| Brightest source (M87 halo) | 148 403 nanomaggies |
+| **Total wall time** | **6.9 s** |
+| Throughput | ~14 900 sources / s |
 
-Hardware: RTX 4070 Ti · i9-10850K (10c/20t) · 64 GB RAM.
+M87 true nucleus position (SIMBAD J2000): RA = 187.706°, Dec = +12.391°.
+The flux-weighted centroid of the detected blob may differ due to the halo
+being truncated at brick boundaries.
 
 ---
 
@@ -91,13 +111,13 @@ vera-catalog fits/legacysurvey-1877p122-image-r.fits.fz
 ```
 ┌── Catalogue ──────────────────────────────────────────────────
 │  Image      : 3600 x 3600 px
-│  Pipeline   : 1.2s  (BG + detect + measure)
-│  N sources  : 5025
-│  flux_auto  : médiane=4.28  max=89822.8  (nanomaggies)
+│  Pipeline   : 1.1s  (BG + detect + measure)
+│  N sources  : 3576
+│  flux_auto  : médiane=3.28  max=148402.7  (nanomaggies)
 │
 │  Fichiers écrits :
-│    vera-1877p122-r.fits  (335 kB)
-│    vera-1877p122-r.csv   (474 kB)
+│    vera-1877p122-r.fits  (~240 kB)
+│    vera-1877p122-r.csv   (~340 kB)
 └───────────────────────────────────────────────────────────────
 ```
 
@@ -111,12 +131,12 @@ vera-run fits/ r vera-virgo
 ┌── Vera multi-brick pipeline ───────────────────────────────────
 │  Bricks  : 28   Threads : 20   Dedup tol : 1"
 │  ...
-│  Pipeline complet  : 7.3s
-│  Sources brutes    : 116 635
-│  Doublons supprimés: 105
-│  Sources finales   : 116 530
-│  Fichiers écrits   : vera-virgo.fits (8.9 MB)  vera-virgo.csv (12 MB)
-│  Total             : 7.7s
+│  Pipeline complet  : 6.6s
+│  Sources brutes    : 102 629
+│  Doublons supprimés: 90
+│  Sources finales   : 102 539
+│  Fichiers écrits   : vera-virgo.fits (7.6 MB)  vera-virgo.csv (10.3 MB)
+│  Total             : 6.9s
 └───────────────────────────────────────────────────────────────
 ```
 
@@ -126,7 +146,7 @@ vera-run fits/ r vera-virgo
 vera-viewer fits/legacysurvey-1877p122-image-r.fits.fz
 ```
 
-- Loads image + runs full pipeline before window opens (~1.2 s)
+- Loads image + runs full pipeline before window opens (~1.1 s)
 - ZScale stretch with live asinh sliders
 - Scroll-wheel zoom to cursor, drag to pan, double-click to fit
 - Green ellipses = detected sources; orange = flagged; yellow = selected
@@ -136,10 +156,10 @@ vera-viewer fits/legacysurvey-1877p122-image-r.fits.fz
 ### Individual diagnostic binaries
 
 ```bash
-vera-inspect   fits/legacysurvey-1877p122-image-r.fits.fz   # image stats + WCS
-vera-background fits/legacysurvey-1877p122-image-r.fits.fz  # background map stats
-vera-detect    fits/legacysurvey-1877p122-image-r.fits.fz   # detection stats
-vera-measure   fits/legacysurvey-1877p122-image-r.fits.fz   # full measurement table
+vera-inspect    fits/legacysurvey-1877p122-image-r.fits.fz   # image stats + WCS
+vera-background fits/legacysurvey-1877p122-image-r.fits.fz   # background map stats
+vera-detect     fits/legacysurvey-1877p122-image-r.fits.fz   # detection stats
+vera-measure    fits/legacysurvey-1877p122-image-r.fits.fz   # full measurement table
 ```
 
 ---
