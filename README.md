@@ -54,8 +54,9 @@ and cross-matches sources at brick boundaries to remove duplicates.
 | Duplicate pairs removed at brick boundaries | 105 |
 | **Final catalog size** | **116 530 sources** |
 | Median flux_auto | 4.06 nanomaggies |
-| Brightest source (M87) | 101 723 nanomaggies |
-| M87 position | RA = 187.79°  Dec = +12.38° |
+| Brightest source (M87 halo) | 101 723 nanomaggies |
+| M87 true nucleus position | RA = 187.706°  Dec = +12.391° (J2000) |
+| M87 detected blob centroid | RA ≈ 187.79°  Dec ≈ +12.38° (flux-weighted, truncated at brick edge) |
 | M87 semi-major axis | 1 057 px (~4.6 arcmin) |
 | Per-brick pipeline (single thread) | ~1.2 s |
 | Background estimation alone | ~13 ms |

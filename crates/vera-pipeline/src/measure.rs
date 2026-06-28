@@ -247,7 +247,10 @@ fn moments_to_axes(mxx: f32, myy: f32, mxy: f32) -> (f32, f32, f32) {
     (a, b, theta)
 }
 
-/// SExtractor Kron radius: Σ(r_ell × I) / Σ(I) over the detection footprint.
+/// Kron radius: Σ(r_ell × I) / Σ(I) summed over the isophotal footprint.
+/// Note: SExtractor computes the same sum over a larger 6×a_image aperture;
+/// restricting to the footprint is equivalent for compact sources and avoids
+/// scanning empty sky pixels far from the object.
 fn compute_kron_radius(
     pixels: &[(usize, usize)],
     image: &Array2<f32>,

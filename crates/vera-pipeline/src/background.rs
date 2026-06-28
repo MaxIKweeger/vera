@@ -126,11 +126,13 @@ fn sigma_clip_stats(px: &mut Vec<f32>, kappa: f32, max_iter: usize) -> (f32, f32
     let var: f32 = px.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n as f32;
     let sigma = var.sqrt();
 
-    // SExtractor mode estimate: if distribution is skewed, use 2.5*median - 1.5*mean.
-    let bg = if (mean - median).abs() < 0.3 * sigma {
-        median
-    } else {
+    // SExtractor mode estimate: use the Pearson approximation when the clipped
+    // distribution is mildly asymmetric (|mean−median|/σ < 0.3); fall back to
+    // the median when the field is so crowded that the approximation breaks down.
+    let bg = if sigma > 0.0 && (mean - median).abs() / sigma < 0.3 {
         2.5 * median - 1.5 * mean
+    } else {
+        median
     };
 
     (bg, sigma)
