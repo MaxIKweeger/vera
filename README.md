@@ -63,8 +63,7 @@ GPU temperature during processing: ~62 °C.
 | SNR map + Union-Find 8-connectivity | CPU | ~160 ms |
 | Centroid + moments (flux-weighted, 2nd order) | CPU Rayon | ~30 ms |
 | Kron aperture flux | **GPU wgpu WGSL** | ~10 ms |
-| **Full pipeline (I/O + BG + detect + measure)** | | **~0.7 s** |
-| Sources detected | | **3 576** |
+| **Full pipeline (I/O + BG + detect + measure)** | CPU + GPU | **~0.7 s — 3 576 sources** |
 
 ### Scale-out — 28 bricks in parallel (vera-run)
 
