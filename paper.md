@@ -52,7 +52,10 @@ Vera addresses this gap: it runs on a consumer GPU without any C dependencies
 `cargo build --release`, and processes a full DECam pointing in under a second.
 Its FITS output is directly compatible with TOPCAT, astropy, and Rubin DP1
 conventions, and its source extraction results are quantitatively consistent
-with SExtractor on the same data.
+with SExtractor on the same data. For researchers who prefer Python, Vera
+also exposes a Python API via PyO3 bindings (`pip install maturin &&
+maturin develop --release`), returning results as plain Python dicts
+compatible with pandas and astropy without any additional dependencies.
 
 # Algorithms
 
